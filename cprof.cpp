@@ -167,8 +167,10 @@ static void printCallstack(lua_State* L){
 
 
 
-
-
+// takes the function on top of the stack and returns the key to be used in infonow
+//static void getInfoKey(lua_State* L){
+//	
+//}
 
 // NOTE: function to be pushed MUST be on top of the stack AND it will get popped
 static void callstackPush(lua_State* L, int regtable, int callstack, int timestack, int proftimestack, size_t time){
@@ -218,6 +220,11 @@ static void callstackPush(lua_State* L, int regtable, int callstack, int timesta
 		// new.t = 0
 		lua_pushstring(L, "t");
 		lua_pushnumber(L, 0);
+		lua_rawset(L, new_);
+
+		// new.f = func
+		lua_pushstring(L, "f");
+		lua_pushvalue(L, -4);
 		lua_rawset(L, new_);
 
 		// stack: ... <func> <infonow> <new>

@@ -69,21 +69,24 @@ local function scanForGlobalFunctions()
 	end
 end
 
-local function drawProfTable(func, root)
+local function drawProfTable(root)
 	local subcalls = {}
 	local selfTime = root.t
+	local func = root.f
+
 	for func,next in pairs(root) do
 		if func == "t" then goto continue end
 		if func == "p" then goto continue end
+		if func == "f" then goto continue end
 
-		table.insert(subcalls, {func=func, time=next.t, next=next})
+		table.insert(subcalls, next)
 		selfTime = selfTime - next.t
 
 		::continue::
 	end
 
 	-- sort by time taken
-	table.sort(subcalls, function(a, b) return a.time > b.time end)
+	table.sort(subcalls, function(a, b) return a.t > b.t end)
 
 	-- print
 	local text = string.format("%.2fms  %s", root.t/1000 / cprof.frameCount, finfo(func))
@@ -95,7 +98,7 @@ local function drawProfTable(func, root)
 		end
 
 		for _,v in ipairs(subcalls) do
-			drawProfTable(v.func, v.next)
+			drawProfTable(v)
 		end
 
 		imgui.TreePop()
@@ -117,7 +120,7 @@ function cprof.draw()
 		local size =  imgui.GetContentRegionAvail()
 		if imgui.BeginListBox("##palette", size) then
 			for k,v in pairs(root) do
-				drawProfTable(k,v)
+				drawProfTable(v)
 			end
 			imgui.EndListBox()
 		end
