@@ -7,7 +7,7 @@
 #include <vector>
 #include <chrono>
 
-//#define DEBUG
+#define DEBUG
 //#define PROFILE_C_FUNCTIONS
 
 // TODO: proftime stack is broken
@@ -41,60 +41,6 @@ static void stackDump(lua_State* L) {
 		printf("  ");
 	}
 	printf("\n");
-}
-
-static int stackTrace(lua_State* L){
-	lua_getglobal(L, "debug");
-	std::cout << " --- STACK TRACE ---\n";
-
-	int level = -1;
-	while (true) {
-		level++;
-		lua_pushstring(L, "getinfo");
-		lua_gettable(L, -2);
-		lua_pushnumber(L, level);
-		lua_pushstring(L, "nfSl");
-		lua_call(L, 2, 1);
-		if (lua_isnil(L, -1)){
-			lua_pop(L, 2);
-			break;
-		}
-		std::cout << "\t" << level << " ";
-
-		lua_pushstring(L, "source");
-		lua_gettable(L, -2);
-		const char* source = lua_tostring(L, -1);
-		std::cout << "in: " << source << " ";
-		lua_pop(L, 1);
-
-		lua_pushstring(L, "name");
-		lua_gettable(L, -2);
-		if (!lua_isnil(L, -1)) {
-			const char* name = lua_tostring(L, -1);
-			std::cout << "name: " << name << " ";
-		}
-		lua_pop(L, 1);
-
-		lua_pushstring(L, "func");
-		lua_gettable(L, -2);
-		if (!lua_isnil(L, -1)) {
-			const void* f = (void*)lua_topointer(L, -1);
-			std::cout << "f: " << f << " ";
-		}
-		lua_pop(L, 1);
-
-		lua_pushstring(L, "currentline");
-		lua_gettable(L, -2);
-		double line = luaL_checknumber(L, -1);
-		std::cout << "line: " << line << " ";
-		lua_pop(L, 1);
-
-		lua_pop(L, 1);
-		std::cout << "\n";
-	}
-
-	std::cout << "\n";
-	return level;
 }
 
 static const char registryKey = 'k';
@@ -150,17 +96,45 @@ static void initRegistry(lua_State* L){
 	lua_pop(L, 1);
 }
 
-static void printInfo(lua_Debug* ar){
+static void printInfo(lua_Debug* ar, bool printName = true){
 	if (ar->what) std::cout << "[" << ar->what << "]";
 
-	if (ar->source && ar->name)
+	if (ar->source && ar->name && printName)
 		std::cout << ar->source << ":" << ar->name << "  ";
-	else if (ar->name)
+	else if (ar->name && printName)
 		std::cout << ar->name << "  ";
 	else if (ar->source)
 		std::cout << ar->source << "  ";
 	else
 		std::cout << "??  ";
+}
+
+static int stackTrace(lua_State* L){
+	lua_Debug ar;
+
+	int depth = 0;
+
+	// get stack depth
+	while (lua_getstack(L, depth+1, &ar)) depth++;
+
+	int count = 0;
+	for (int i=depth; i>=0; i--) {
+		if (lua_getstack(L, i, &ar) == 0) break;
+		lua_getinfo(L, "nS", &ar);
+
+#ifdef PROFILE_C_FUNCTIONS
+		printInfo(&ar, false);
+		count++;
+#else
+		if (strcmp(ar.what, "C") != 0){
+			printInfo(&ar, false);
+			count++;
+		}
+#endif
+	}
+
+	std::cout << "(" << count << ")\n";
+	return count;
 }
 
 static void printCallstack(lua_State* L){
@@ -218,6 +192,7 @@ static void onCall(lua_State* L, lua_Debug* ar){
 	const void* fp = lua_topointer(L, -1);
 	std::cout << " <" << fp << ">\n";
 	lua_pop(L, 1);
+	printCallstack(L);
 #endif
 
 	//// add function to callstack ////
@@ -272,8 +247,9 @@ static void onCall(lua_State* L, lua_Debug* ar){
 	lua_pop(L, 2);
 
 #ifdef DEBUG
-	std::cout << "after onCall: ";
+	std::cout << "after onCall:\n";
 	printCallstack(L);
+	stackTrace(L);
 	std::cout << "\n";
 #endif
 
@@ -310,6 +286,7 @@ static void onReturn(lua_State* L, lua_Debug* ar, bool functionOnStack = false){
 	std::cout << "onReturn: "; printInfo(ar);
 	const void* fp = lua_topointer(L, -1);
 	std::cout << " <" << fp << ">\n";
+	printCallstack(L);
 #endif
 
 	// pop callstack until 'func'
@@ -388,8 +365,9 @@ static void onReturn(lua_State* L, lua_Debug* ar, bool functionOnStack = false){
 	}
 
 #ifdef DEBUG
-	std::cout << "after onReturn: ";
+	std::cout << "after onReturn:\n";
 	printCallstack(L);
+	stackTrace(L);
 	std::cout << "\n";
 #endif
 
@@ -465,6 +443,7 @@ static int l_reset(lua_State* L){
 	l_stop(L);
 	push_registry_entry_single(L, REG_INFOROOT);
 	initRegistry(L);
+	proftime_total = 0;
 	return 1; // return previous inforoot
 }
 
