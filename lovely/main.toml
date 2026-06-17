@@ -1,0 +1,37 @@
+[manifest]
+version = "1.0.0"
+dump_lua = true
+priority = 0
+
+[[patches]]
+[patches.module]
+source = "cprof.lua"
+before = "main.lua"
+name = "lib.cprof"
+
+[[patches]]
+[patches.pattern]
+target = "main.lua"
+pattern = 'bit = require "bit"'
+position = "before"
+payload = 'cprof = require("lib.cprof")'
+match_indent = true
+times = 1
+
+[[patches]]
+[patches.pattern]
+target = "main.lua"
+pattern = "prof.push('frame')"
+position = "after"
+payload = "cprof.start(); --if cs.name == 'AtomMap' then cprof.start() end;"
+match_indent = true
+times = 1
+
+[[patches]]
+[patches.pattern]
+target = "main.lua"
+pattern = 'prof.pop("frame")'
+position = "before"
+payload = "cprof.stop(); cprof.resetPrint()"
+match_indent = true
+times = 1

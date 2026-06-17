@@ -1,0 +1,8 @@
+{
+    "id": "cprof",
+    "name": "cprof",
+    "author": "redsti",
+    "description": "My profiler",
+    "version": "1.0.0",
+    "config": []
+}
