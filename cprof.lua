@@ -111,7 +111,7 @@ function cprof.draw()
 		helpers.SetNextWindowSize(250, 600, 'ImGuiCond_FirstUseEver')
 		imgui.Begin("Profiler info")
 
-		imgui.Text(string.format("Proftime: %.2fms", cprof.getProfTime()/1000 / cprof.frameCount))
+		imgui.Text(string.format("Proftime: %.2f ms total", cprof.getProfTime()/1000 / cprof.frameCount))
 		local doReset = imgui.Button("reset");
 
 		local size =  imgui.GetContentRegionAvail()

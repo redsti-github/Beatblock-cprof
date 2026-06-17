@@ -9,9 +9,7 @@
 
 //#define DEBUG
 
-static int l_start(lua_State* L);
-
-static void stackDump(lua_State* L) {
+inline static void stackDump(lua_State* L) {
 	int i;
 	int top = lua_gettop(L);
 	for (i = 1; i <= top; i++) {
@@ -45,28 +43,31 @@ inline static int push_regtable(lua_State* L){
 	lua_rawget(L, LUA_REGISTRYINDEX);
 	return lua_gettop(L);
 }
-inline static int push_registry_entry(lua_State* L, int regidx, const char* name){
-	lua_pushstring(L, name);
-	lua_rawget(L, regidx);
+
+typedef enum {
+	REG_CALLSTACK = 0,
+	REG_INFOROOT = 1,
+	REG_INFONOW = 2,
+	REG_TIMESTACK = 3,
+	REG_PROFTIMESTACK = 4,
+} reg_key_t;
+
+inline static int push_registry_entry(lua_State* L, int regidx, const reg_key_t name){
+	lua_rawgeti(L, regidx, (int)name);
 	return lua_gettop(L);
 }
-static void push_registry_entry_single(lua_State* L, const char* name){
+inline static void push_registry_entry_single(lua_State* L, const reg_key_t name){
 	int regidx = push_regtable(L);
 	push_registry_entry(L, regidx, name);
 	lua_remove(L, regidx);
 }
-static void pop_registry_entry(lua_State* L, const char* name, int idx){
-	push_regtable(L);
-	lua_pushstring(L, name);
-	lua_pushvalue(L, idx<0 ? idx-2 : idx);
-	lua_rawset(L, -3);
-	lua_pop(L, 1);
+inline static void pop_registry_entry(lua_State* L, const reg_key_t name, int idx){ // TODO: take regtable as argument!!
+	int regtable = push_regtable(L);
+	lua_pushvalue(L, idx<0 ? idx-1 : idx);
+	lua_rawseti(L, regtable, (int)name);
+	lua_settop(L, regtable-1);
 }
-#define REG_CALLSTACK "callstack"
-#define REG_INFOROOT "inforoot"
-#define REG_INFONOW "infonow"
-#define REG_TIMESTACK "timestack"
-#define REG_PROFTIMESTACK "proftimestack"
+
 static void initRegistry(lua_State* L){
 	lua_pushlightuserdata(L, (void *)&registryKey);
 	lua_newtable(L); // TODO: use lua_createtable instead
@@ -276,7 +277,7 @@ static void callstackPop(lua_State* L, int regtable, int callstack, int timestac
 	lua_settop(L, infonow-1);
 }
 
-static int getStackDepth(lua_State* L, int depth = 3){ // initial depth is best guess
+inline static int getStackDepth(lua_State* L, int depth = 3){ // initial depth is best guess
 	if (depth < 0) depth = 0;
 	lua_Debug ar;
 
