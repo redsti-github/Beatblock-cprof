@@ -2,10 +2,9 @@ jit.off()
 cprof = package.loadlib(love.filesystem.getSaveDirectory() .. "/Mods/cprof/cprof.so", "luaopen_cprof")()
 
 cprof.functionNames = {}
+cprof.frameCount = 0
 local unknownFunctionNames = {}
 local updateFunctionNames = false
-
-local PRINT_MIN_MS = 0.05 -- minimum time a function needs to take to be printed
 
 local function finfo(f)
 	if cprof.functionNames[f] then
@@ -59,8 +58,8 @@ local function scanForGlobalFunctions()
 				-- apply name
 				cprof.functionNames[v] = name
 
-				-- TODO mark as done
-				--unknownFunctionNames[v] = nil
+				-- mark as done
+				unknownFunctionNames[v] = nil
 			elseif type(v) == "table" and not scanned[v] then
 				scanned[v] = true
 				toScan[#toScan+1] = {t=v, p=path .. k .. "."}
@@ -71,17 +70,13 @@ local function scanForGlobalFunctions()
 end
 
 local function drawProfTable(func, root)
-	local PRINT_MIN_MS = 0
-
 	local subcalls = {}
 	local selfTime = root.t
 	for func,next in pairs(root) do
 		if func == "t" then goto continue end
 		if func == "p" then goto continue end
 
-		if next.t/1000 > PRINT_MIN_MS then
-			table.insert(subcalls, {func=func, time=next.t, next=next})
-		end
+		table.insert(subcalls, {func=func, time=next.t, next=next})
 		selfTime = selfTime - next.t
 
 		::continue::
@@ -91,12 +86,12 @@ local function drawProfTable(func, root)
 	table.sort(subcalls, function(a, b) return a.time > b.time end)
 
 	-- print
-	local text = string.format("%.2fms  %s", root.t/1000, finfo(func))
+	local text = string.format("%.2fms  %s", root.t/1000 / cprof.frameCount, finfo(func))
 	if #subcalls == 0 then
 		imgui.BulletText(text)
 	elseif imgui.TreeNode_StrStr(tostring(func), "%s", text) then
-		if #subcalls > 0 and selfTime/1000 > PRINT_MIN_MS then
-			imgui.BulletText(string.format("%.2fms  (self)", selfTime/1000))
+		if #subcalls > 0 then
+			imgui.BulletText(string.format("%.2fms  (self)", selfTime/1000 / cprof.frameCount))
 		end
 
 		for _,v in ipairs(subcalls) do
@@ -110,21 +105,14 @@ end
 function cprof.draw()
 	cprof.stop()
 	local root = cprof.getProfTable()
+	cprof.frameCount = cprof.frameCount + 1
 	if root ~= {} then
 		helpers.SetNextWindowPos(0, 25, 'ImGuiCond_FirstUseEver')
 		helpers.SetNextWindowSize(250, 600, 'ImGuiCond_FirstUseEver')
 		imgui.Begin("Profiler info")
 
-		imgui.Text(string.format("Proftime: %.2fms", cprof.getProfTime()/1000))
-
-		if updateFunctionNames then
-			scanForGlobalFunctions(_G, "")
-			updateFunctionNames = false
-		end
-
-		if imgui.Button("reset") then
-			cprof.reset()
-		end
+		imgui.Text(string.format("Proftime: %.2fms", cprof.getProfTime()/1000 / cprof.frameCount))
+		local doReset = imgui.Button("reset");
 
 		local size =  imgui.GetContentRegionAvail()
 		if imgui.BeginListBox("##palette", size) then
@@ -134,6 +122,16 @@ function cprof.draw()
 			imgui.EndListBox()
 		end
 		imgui.End()
+
+		if updateFunctionNames then
+			scanForGlobalFunctions(_G, "")
+			updateFunctionNames = false
+		end
+
+		if doReset then -- or cprof.frameCount > 15
+			cprof.reset()
+			cprof.frameCount = 0
+		end
 	end
 	cprof.start()
 end
