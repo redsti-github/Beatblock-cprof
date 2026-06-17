@@ -1,17 +1,29 @@
 jit.off()
-
 cprof = package.loadlib(love.filesystem.getSaveDirectory() .. "/Mods/cprof/cprof.so", "luaopen_cprof")()
+
+cprof.functionNames = {}
+local unknownFunctionNames = {}
+local updateFunctionNames = false
 
 local PRINT_MIN_MS = 0.05 -- minimum time a function needs to take to be printed
 
 local function finfo(f)
+	if cprof.functionNames[f] then
+		return cprof.functionNames[f] -- TODO: tooltip that shows "file[line:line]"
+	else
+		if not unknownFunctionNames[f] then
+			updateFunctionNames = true
+			unknownFunctionNames[f] = 0
+		end
+	end
+
 	local info = debug.getinfo(f, "S")
 	local res = ""
 	if info.source then
 		if string.sub(info.source,1,1) == '@' or string.sub(info.source,1,1) == '=' then
 			res = res .. info.source
 		else
-			res = res .. "<from string>"
+			res = res .. "<from string>" -- TODO: show the code on hover (tooltip)
 		end
 	end
 	res = res .. "[" .. tostring(info.linedefined) .. ":" .. tostring(info.lastlinedefined)  .. "]"
@@ -19,48 +31,41 @@ local function finfo(f)
 	return res
 end
 
-local function printProfTable(func, root, depth, maxdepth)
-	maxdepth = maxdepth or 30
-	depth = depth or 0
+local function scanForGlobalFunctions()
+	local scanned = {}
+	scanned[_G] = true
+	local toScan = {{t=_G,p=""}}
 
-	local tab = "|  "
-	local tabs = ""
-	for i=0,depth do tabs = tabs .. tab end
+	while #toScan > 0 do
+		local t = toScan[#toScan]
+		toScan[#toScan] = nil
+		local path = t.p
+		local t = t.t
 
-	local subcalls = {}
-	local selfTime = root.t
-	for func,next in pairs(root) do
-		if func == "t" then goto continue end
-		if func == "p" then goto continue end
+		for k,v in pairs(t) do
+			if type(k) ~= "string" then goto continue end
+			if type(v) == "function" and unknownFunctionNames[v] then
+				-- figure out what name to give this function
+				local name = path .. k
+				if prof.pop == prof.push and v == prof.pop then
+					name = "prof.noop"
+				end
 
-		if next.t/1000 > PRINT_MIN_MS then
-			table.insert(subcalls, {func=func, time=next.t, next=next})
-		end
-		selfTime = selfTime - next.t
+				-- check for conflicts (debug)
+				if cprof.functionNames[v] and cprof.functionNames[v] ~= name then
+					print("conflict: ", cprof.functionNames[v], name)
+				end
 
-		::continue::
-	end
+				-- apply name
+				cprof.functionNames[v] = name
 
-	--if #subcalls == 1 and depth == 0 then -- only one root call, skip it for clarity TODO: print on one line instead?
-	--	return printProfTable(subcalls[1].next, depth, maxdepth)
-	--end
-
-	-- sort by time taken
-	table.sort(subcalls, function(a, b) return a.time > b.time end)
-
-	-- print
-	print(tabs .. tostring(root.t/1000) .. "ms  " .. finfo(func))
-
-	if #subcalls > 0 then
-		if selfTime/1000 > PRINT_MIN_MS then
-			print(tabs .. tab .. tostring(selfTime/1000) .. "ms  (self)")
-		end
-		if depth >= maxdepth then
-			print(tabs .. tab .. "...")
-		else
-			for _,v in ipairs(subcalls) do
-				printProfTable(v.func, v.next, depth+1, maxdepth)
+				-- TODO mark as done
+				--unknownFunctionNames[v] = nil
+			elseif type(v) == "table" and not scanned[v] then
+				scanned[v] = true
+				toScan[#toScan+1] = {t=v, p=path .. k .. "."}
 			end
+			::continue::
 		end
 	end
 end
@@ -102,13 +107,24 @@ local function drawProfTable(func, root)
 	end
 end
 
-function cprof.resetPrint()
+function cprof.draw()
 	cprof.stop()
 	local root = cprof.getProfTable()
 	if root ~= {} then
 		helpers.SetNextWindowPos(0, 25, 'ImGuiCond_FirstUseEver')
 		helpers.SetNextWindowSize(250, 600, 'ImGuiCond_FirstUseEver')
 		imgui.Begin("Profiler info")
+
+		imgui.Text(string.format("Proftime: %.2fms", cprof.getProfTime()/1000))
+
+		if updateFunctionNames then
+			scanForGlobalFunctions(_G, "")
+			updateFunctionNames = false
+		end
+
+		if imgui.Button("reset") then
+			cprof.reset()
+		end
 
 		local size =  imgui.GetContentRegionAvail()
 		if imgui.BeginListBox("##palette", size) then
@@ -118,13 +134,8 @@ function cprof.resetPrint()
 			imgui.EndListBox()
 		end
 		imgui.End()
-
-		--print("START")
-		--for k,v in pairs(root) do
-		--	printProfTable(k,v)
-		--end
-		--print("END")
 	end
+	cprof.start()
 end
 
 return cprof

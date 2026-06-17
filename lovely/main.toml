@@ -23,7 +23,7 @@ times = 1
 target = "main.lua"
 pattern = "prof.push('frame')"
 position = "after"
-payload = "cprof.start(); --if cs.name == 'AtomMap' then cprof.start() end;"
+payload = "--cprof.start(); --if cs.name == 'AtomMap' then cprof.start() end;"
 match_indent = true
 times = 1
 
@@ -32,6 +32,6 @@ times = 1
 target = "main.lua"
 pattern = 'prof.pop("frame")'
 position = "before"
-payload = "cprof.stop(); cprof.resetPrint()"
+payload = "cprof.draw()"
 match_indent = true
 times = 1

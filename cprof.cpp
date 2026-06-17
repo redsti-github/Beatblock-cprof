@@ -10,6 +10,9 @@
 //#define DEBUG
 //#define PROFILE_C_FUNCTIONS
 
+// TODO: proftime stack is broken
+static double proftime_total = 0;
+
 static int l_start(lua_State* L);
 
 static void stackDump(lua_State* L) {
@@ -121,9 +124,10 @@ static void pop_registry_entry(lua_State* L, const char* name, int idx){
 #define REG_INFOROOT "inforoot"
 #define REG_INFONOW "infonow"
 #define REG_TIMESTACK "timestack"
+#define REG_PROFTIMESTACK "proftimestack"
 static void initRegistry(lua_State* L){
 	lua_pushlightuserdata(L, (void *)&registryKey);
-	lua_newtable(L);
+	lua_newtable(L); // TODO: use lua_createtable instead
 	lua_rawset(L, LUA_REGISTRYINDEX);
 
 	lua_newtable(L);
@@ -132,6 +136,12 @@ static void initRegistry(lua_State* L){
 
 	lua_newtable(L);
 	pop_registry_entry(L, REG_TIMESTACK, -1);
+	lua_pop(L, 1);
+
+	lua_newtable(L);
+	lua_pushnumber(L, 0);
+	lua_rawseti(L, -2, 0); // proftimestack[0] = 0
+	pop_registry_entry(L, REG_PROFTIMESTACK, -1);
 	lua_pop(L, 1);
 
 	lua_newtable(L);
@@ -191,7 +201,7 @@ static void printCallstack(lua_State* L){
 }
 
 static void onCall(lua_State* L, lua_Debug* ar){
-	size_t time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count(); // TODO: subtract time spent in `onCall` and `onReturn`
+	size_t time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 	if (lua_getinfo(L, "nS", ar) == 0){
 		lua_pushstring(L, "[cprof] call to 'lua_getinfo' failed!");
 		lua_error(L);
@@ -267,6 +277,15 @@ static void onCall(lua_State* L, lua_Debug* ar){
 	std::cout << "\n";
 #endif
 
+	//// update proftimestack ////
+	// proftimestack[len] = time2 - time
+	int proftimestack = push_registry_entry(L, regidx, REG_PROFTIMESTACK);
+	size_t time2 = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+	lua_pushnumber(L, time2 - time);
+	lua_rawseti(L, proftimestack, len);
+
+	proftime_total += time2 - time;
+
 	lua_settop(L, regidx-1);
 }
 
@@ -285,6 +304,7 @@ static void onReturn(lua_State* L, lua_Debug* ar, bool functionOnStack = false){
 	int regidx = push_regtable(L);
 	int timestack = push_registry_entry(L, regidx, REG_TIMESTACK);
 	int callstack = push_registry_entry(L, regidx, REG_CALLSTACK);
+	int proftimestack = push_registry_entry(L, regidx, REG_PROFTIMESTACK);
 
 #ifdef DEBUG
 	std::cout << "onReturn: "; printInfo(ar);
@@ -293,7 +313,7 @@ static void onReturn(lua_State* L, lua_Debug* ar, bool functionOnStack = false){
 #endif
 
 	// pop callstack until 'func'
-	size_t len = lua_objlen(L, -1);
+	size_t len = lua_objlen(L, callstack);
 	for (; len > 0; len--) {
 		// func2 = callstack[len]
 		lua_rawgeti(L, callstack, len);
@@ -304,24 +324,32 @@ static void onReturn(lua_State* L, lua_Debug* ar, bool functionOnStack = false){
 		lua_rawseti(L, callstack, len);
 
 		//// update timestack ////
-		// delta = timestack[len]
+		// delta = time - timestack[len]
 		lua_rawgeti(L, timestack, len);
 		double delta = time - lua_tonumber(L, -1);
 		lua_pop(L, 1);
 
-		// timestack[i] = nil
+		// timestack[len] = nil
 		lua_pushnil(L);
 		lua_rawseti(L, timestack, len);
 
 		//// update infonow ////
-		// infonow.t = infonow.t + delta
 		int infonow = push_registry_entry(L, regidx, REG_INFONOW);
+
+		// t = infonow.t
 		lua_pushstring(L, "t");
 		lua_rawget(L, infonow);
-		double t = lua_tonumber(L, -1) + delta;
+		double t = lua_tonumber(L, -1);
 		lua_pop(L, 1);
+
+		// proftime = proftimestack[len]
+		lua_rawgeti(L, infonow, len);
+		double proftime = lua_tonumber(L, -1);
+		lua_pop(L, 1);
+
+		// infonow.t = infonow.t + delta - proftime
 		lua_pushstring(L, "t");
-		lua_pushnumber(L, t);
+		lua_pushnumber(L, t + delta - proftime);
 		lua_rawset(L, infonow);
 
 		// infonow = infonow.p
@@ -330,26 +358,55 @@ static void onReturn(lua_State* L, lua_Debug* ar, bool functionOnStack = false){
 		pop_registry_entry(L, REG_INFONOW, -1);
 		lua_pop(L, 2); // pop infonow.p, infonow
 
+		//// update proftimestack ////
+		// proftimestack[len] = nil
+		lua_pushnil(L);
+		lua_rawseti(L, proftimestack, len);
+
+		// prev = proftimestack[len-1]
+		lua_rawgeti(L, proftimestack, len-1);
+		double prev = lua_tonumber(L, -1);
+		lua_pop(L, 1);
+
+		// proftimestack[len-1] = prev + proftime
+		lua_pushnumber(L, prev + proftime);
+		lua_rawseti(L, proftimestack, len-1);
+
 		// if (func == func2) break;
 		int eq = lua_rawequal(L, func, func2);
 		lua_pop(L, 1);
 
 		// stack: <f> <regtable> <timestack> <callstack>
-		if (eq) {break;}
+		if (eq) {len--; break;}
 
 		if (len == 1) {
 			std::cout << "[cprof] ERROR! hit bottom of callstack without finding returned function!\n";
 			l_start(L); // reset
+			len = lua_objlen(L, callstack);
 			break;
 		}
 	}
-	lua_settop(L, func-1);
 
 #ifdef DEBUG
 	std::cout << "after onReturn: ";
 	printCallstack(L);
 	std::cout << "\n";
 #endif
+
+	//// update proftimestack ////
+	// prev = proftimestack[len]
+	lua_rawgeti(L, proftimestack, len);
+	double prev = lua_tonumber(L, -1);
+	lua_pop(L, 1);
+
+	// proftimestack[len] = prev + time2 - time
+	size_t time2 = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+	lua_pushnumber(L, prev + (time2 - time));
+	lua_rawseti(L, proftimestack, len);
+
+	proftime_total += time2 - time;
+
+	lua_settop(L, func-1);
 }
 
 static void debugHook(lua_State* L, lua_Debug* ar){
@@ -399,6 +456,8 @@ static int l_stop(lua_State* L){
 	}
 	lua_pop(L, 1);
 
+	std::cout << "total proftime = " << proftime_total/1000 << " ms\n";
+
 	return 0;
 }
 
@@ -414,10 +473,17 @@ static int l_getProfTable(lua_State* L){
 	return 1;
 }
 
+static int l_getproftime(lua_State* L){
+	push_registry_entry_single(L, REG_PROFTIMESTACK);
+	lua_rawgeti(L, -1, 0);
+	return 1;
+}
+
 static const struct luaL_reg cprof [] = {
 	{"reset", l_reset},
 	{"start", l_start},
 	{"stop", l_stop},
+	{"getProfTime", l_getproftime},
 	{"getProfTable", l_getProfTable},
 	{NULL, NULL}  /* sentinel */
 };
