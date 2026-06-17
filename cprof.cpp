@@ -61,11 +61,8 @@ inline static void push_registry_entry_single(lua_State* L, const reg_key_t name
 	push_registry_entry(L, regidx, name);
 	lua_remove(L, regidx);
 }
-inline static void pop_registry_entry(lua_State* L, const reg_key_t name, int idx){ // TODO: take regtable as argument!!
-	int regtable = push_regtable(L);
-	lua_pushvalue(L, idx<0 ? idx-1 : idx);
+inline static void pop_registry_entry(lua_State* L, int regtable, const reg_key_t name){
 	lua_rawseti(L, regtable, (int)name);
-	lua_settop(L, regtable-1);
 }
 
 static void initRegistry(lua_State* L){
@@ -73,24 +70,25 @@ static void initRegistry(lua_State* L){
 	lua_newtable(L); // TODO: use lua_createtable instead
 	lua_rawset(L, LUA_REGISTRYINDEX);
 
-	lua_newtable(L);
-	pop_registry_entry(L, REG_CALLSTACK, -1);
-	lua_pop(L, 1);
+	int regtable = push_regtable(L);
 
 	lua_newtable(L);
-	pop_registry_entry(L, REG_TIMESTACK, -1);
-	lua_pop(L, 1);
+	pop_registry_entry(L, regtable, REG_CALLSTACK);
+
+	lua_newtable(L);
+	pop_registry_entry(L, regtable, REG_TIMESTACK);
 
 	lua_newtable(L);
 	lua_pushnumber(L, 0);
 	lua_rawseti(L, -2, 0); // proftimestack[0] = 0
-	pop_registry_entry(L, REG_PROFTIMESTACK, -1);
-	lua_pop(L, 1);
+	pop_registry_entry(L, regtable, REG_PROFTIMESTACK);
 
 	lua_newtable(L);
-	pop_registry_entry(L, REG_INFOROOT, -1);
-	pop_registry_entry(L, REG_INFONOW, -1);
-	lua_pop(L, 1);
+	lua_pushvalue(L, -1);
+	pop_registry_entry(L, regtable, REG_INFOROOT);
+	pop_registry_entry(L, regtable, REG_INFONOW);
+
+	lua_pop(L, 1); // pop regtable
 }
 
 static void printInfo(lua_Debug* ar, bool printName = true){
@@ -214,9 +212,9 @@ static void callstackPush(lua_State* L, int regtable, int callstack, int timesta
 	}
 	// stack: <infonow> <infonow[func]>
 	// infonow = infonow[func]
-	pop_registry_entry(L, REG_INFONOW, -1);
-
-	lua_settop(L, infonow-1);
+	pop_registry_entry(L, regtable, REG_INFONOW);
+	// stack: <old infonow>
+	lua_pop(L, 1);
 }
 
 static void callstackPop(lua_State* L, int regtable, int callstack, int timestack, int proftimestack, size_t time){ // TODO: add an accuracy flag for functions that didnt hook `return` xor `call`
@@ -272,9 +270,9 @@ static void callstackPop(lua_State* L, int regtable, int callstack, int timestac
 	// infonow = infonow.p
 	lua_pushstring(L, "p");
 	lua_rawget(L, infonow);
-	pop_registry_entry(L, REG_INFONOW, -1);
+	pop_registry_entry(L, regtable, REG_INFONOW);
 
-	lua_settop(L, infonow-1);
+	lua_pop(L, 1); // pop old infonow
 }
 
 inline static int getStackDepth(lua_State* L, int depth = 3){ // initial depth is best guess
