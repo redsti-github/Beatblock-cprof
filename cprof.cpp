@@ -9,34 +9,6 @@
 
 //#define DEBUG
 
-inline static void stackDump(lua_State* L) {
-	int i;
-	int top = lua_gettop(L);
-	for (i = 1; i <= top; i++) {
-		int t = lua_type(L, i);
-		switch (t) {
-			case LUA_TSTRING:
-				//printf("`%s'", lua_tostring(L, i));
-				printf("<str>");
-				break;
-
-			case LUA_TBOOLEAN:
-				printf(lua_toboolean(L, i) ? "true" : "false");
-				break;
-
-			case LUA_TNUMBER:
-				printf("%g", lua_tonumber(L, i));
-				break;
-
-			default:
-				printf("%s", lua_typename(L, t));
-				break;
-		}
-		printf("  ");
-	}
-	printf("\n");
-}
-
 static const char registryKey = 'k';
 inline static int push_regtable(lua_State* L){
 	lua_pushlightuserdata(L, (void *)&registryKey);
@@ -89,6 +61,36 @@ static void initRegistry(lua_State* L){
 	pop_registry_entry(L, regtable, REG_INFONOW);
 
 	lua_pop(L, 1); // pop regtable
+}
+
+
+#ifdef DEBUG
+inline static void stackDump(lua_State* L) {
+	int i;
+	int top = lua_gettop(L);
+	for (i = 1; i <= top; i++) {
+		int t = lua_type(L, i);
+		switch (t) {
+			case LUA_TSTRING:
+				//printf("`%s'", lua_tostring(L, i));
+				printf("<str>");
+				break;
+
+			case LUA_TBOOLEAN:
+				printf(lua_toboolean(L, i) ? "true" : "false");
+				break;
+
+			case LUA_TNUMBER:
+				printf("%g", lua_tonumber(L, i));
+				break;
+
+			default:
+				printf("%s", lua_typename(L, t));
+				break;
+		}
+		printf("  ");
+	}
+	printf("\n");
 }
 
 static void printInfo(lua_Debug* ar, bool printName = true){
@@ -161,6 +163,12 @@ static void printCallstack(lua_State* L){
 
 	if (infonowParentCount != len) std::cout << "[cprof] ERROR! 'infonow' depth != 'callstack' depth!!";
 }
+#endif
+
+
+
+
+
 
 
 static void callstackPush(lua_State* L, int regtable, int callstack, int timestack, int proftimestack, int func, size_t time){
@@ -181,6 +189,8 @@ static void callstackPush(lua_State* L, int regtable, int callstack, int timesta
 	// proftimestack[len] = 0
 	lua_pushnumber(L, 0);
 	lua_rawseti(L, proftimestack, len);
+
+	// TODO: use an `infonowstack` instead of infonow.p?
 
 	// push(infonow)
 	int infonow = push_registry_entry(L, regtable, REG_INFONOW);
