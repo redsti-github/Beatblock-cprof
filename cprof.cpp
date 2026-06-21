@@ -9,6 +9,10 @@
 
 //#define DEBUG
 
+// TODO: check for tail-calls
+// TODO: call counts
+// TODO: properly count calls for back-to-back C calls (they don't hook return)
+
 static const char registryKey = 'k';
 inline static int push_regtable(lua_State* L){
 	lua_pushlightuserdata(L, (void *)&registryKey);
@@ -168,12 +172,25 @@ static void printCallstack(lua_State* L){
 
 
 // takes the function on top of the stack and returns the key to be used in infonow
-//static void getInfoKey(lua_State* L){
-//	
-//}
+static void getInfoKey(lua_State* L){
+	lua_Debug ar;
+	lua_getinfo(L, ">Sf", &ar);
+
+	if ((ar.source[0] != '@') || (strcmp(ar.what, "C") == 0)){
+		return; // function is already ontop
+	}
+
+	lua_pop(L, 1);
+	lua_pushstring(L, ar.source);
+	lua_pushstring(L, ":");
+	lua_pushnumber(L, ar.linedefined);
+	lua_pushstring(L, ":");
+	lua_pushnumber(L, ar.lastlinedefined);
+	lua_concat(L, 5);
+}
 
 // NOTE: function to be pushed MUST be on top of the stack AND it will get popped
-static void callstackPush(lua_State* L, int regtable, int callstack, int timestack, int proftimestack, size_t time){
+static void callstackPush(lua_State* L, int regtable, int callstack, int timestack, int proftimestack, size_t time, bool accurate){
 	size_t len = lua_objlen(L, callstack) + 1;
 	// stack: ... <func>
 
@@ -199,6 +216,7 @@ static void callstackPush(lua_State* L, int regtable, int callstack, int timesta
 	int infonow = push_registry_entry(L, regtable, REG_INFONOW);
 	// stack: ... <func> <infonow>
 	lua_pushvalue(L, -2);
+	getInfoKey(L);
 	lua_rawget(L, infonow);
 
 	// if (infonow[func] == nil)
@@ -227,12 +245,36 @@ static void callstackPush(lua_State* L, int regtable, int callstack, int timesta
 		lua_pushvalue(L, -4);
 		lua_rawset(L, new_);
 
+		// new.c = 1
+		lua_pushstring(L, "c");
+		lua_pushnumber(L, 1);
+		lua_rawset(L, new_);
+
+		if (!accurate) {
+			lua_pushstring(L, "i");
+			lua_pushnumber(L, 1);
+			lua_rawset(L, new_);
+		}
+
 		// stack: ... <func> <infonow> <new>
 
 		// infonow[func] = new
 		lua_pushvalue(L, -3);
+		getInfoKey(L);
 		lua_pushvalue(L, new_);
 		lua_rawset(L, infonow);
+	}else{
+		// increment callcount
+		// c = infonow.c
+		lua_pushstring(L, "c");
+		lua_rawget(L, -2);
+		double c = lua_tonumber(L, -1);
+		lua_pop(L, 1);
+
+		// infonow.c = c+1
+		lua_pushstring(L, "c");
+		lua_pushnumber(L, c+1);
+		lua_rawset(L, -3);
 	}
 	// stack: ... <func> <infonow> <infonow[func]>
 	// infonow = infonow[func]
@@ -241,7 +283,7 @@ static void callstackPush(lua_State* L, int regtable, int callstack, int timesta
 	lua_pop(L, 2);
 }
 
-static void callstackPop(lua_State* L, int regtable, int callstack, int timestack, int proftimestack, size_t time){ // TODO: add an accuracy flag for functions that didnt hook `return` xor `call`
+static void callstackPop(lua_State* L, int regtable, int callstack, int timestack, int proftimestack, size_t time, bool accurate){
 	size_t len = lua_objlen(L, callstack);
 
 	// t1 = timestack[len]
@@ -290,6 +332,12 @@ static void callstackPop(lua_State* L, int regtable, int callstack, int timestac
 	lua_pushstring(L, "t");
 	lua_pushnumber(L, tprev + time - t1 - pt);
 	lua_rawset(L, infonow);
+
+	if (!accurate) {
+		lua_pushstring(L, "i");
+		lua_pushnumber(L, 1);
+		lua_rawset(L, infonow);
+	}
 
 	// infonow = infonow.p
 	lua_pushstring(L, "p");
@@ -386,17 +434,17 @@ static void debugHook(lua_State* L, lua_Debug* ar){
 	// our stack is "good" until sharedDepth
 	// pop all "bad" functions
 	while (lua_objlen(L, callstack) > sharedDepth)
-		callstackPop(L, regtable, callstack, timestack, proftimestack, time);
+		callstackPop(L, regtable, callstack, timestack, proftimestack, time, false); // NOTE: allways inaccurate, since stack in return hooks contain the returning function
 
 	// push all functions that callstack has, but we don't (unless this is a return, the ignore the last entry (the returning function))
 	for (size_t i = lua_objlen(L, callstack)+1; i <= stackDepth + (isCall ? 1 : 0); i++){
 		lua_getstack(L, stackDepth-i+1, ar); // equiv for callstack[i]
 		lua_getinfo(L, "f", ar); // push function
-		callstackPush(L, regtable, callstack, timestack, proftimestack, time);
+		callstackPush(L, regtable, callstack, timestack, proftimestack, time, i == stackDepth+1); // only last pushed function (in call hooks) is accurate
 	}
 
 	if (!isCall && lua_objlen(L, callstack) > stackDepth) { // make sure we pop the returning function, if we haven't already
-		callstackPop(L, regtable, callstack, timestack, proftimestack, time);
+		callstackPop(L, regtable, callstack, timestack, proftimestack, time, true);
 	}
 
 #ifdef DEBUG
@@ -450,7 +498,7 @@ static int l_stop(lua_State* L){
 	int proftimestack = push_registry_entry(L, regtable, REG_PROFTIMESTACK);
 
 	while (lua_objlen(L, callstack) > 0)
-		callstackPop(L, regtable, callstack, timestack, proftimestack, time);
+		callstackPop(L, regtable, callstack, timestack, proftimestack, time, true);
 
 	return 0;
 }
