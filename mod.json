@@ -2,7 +2,7 @@
     "id": "cprof",
     "name": "cprof",
     "author": "redsti",
-    "description": "My profiler",
+    "description": "cprof is a profiler for Beatblock",
     "version": "1.0.0",
     "config": []
 }
