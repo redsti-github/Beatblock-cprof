@@ -10,8 +10,7 @@
 //#define DEBUG
 
 // TODO: check for tail-calls
-// TODO: call counts
-// TODO: properly count calls for back-to-back C calls (they don't hook return)
+// TODO: properly count calls for back-to-back C calls that don't hook return
 
 static const char registryKey = 'k';
 inline static int push_regtable(lua_State* L){
@@ -209,8 +208,6 @@ static void callstackPush(lua_State* L, int regtable, int callstack, int timesta
 	// proftimestack[len] = 0
 	lua_pushnumber(L, 0);
 	lua_rawseti(L, proftimestack, len);
-
-	// TODO: use an `infonowstack` instead of infonow.p?
 
 	// push(infonow)
 	int infonow = push_registry_entry(L, regtable, REG_INFONOW);

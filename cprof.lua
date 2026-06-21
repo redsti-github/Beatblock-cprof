@@ -1,8 +1,6 @@
 jit.off()
 cprof = package.loadlib(love.filesystem.getSaveDirectory() .. "/Mods/cprof/cprof.so", "luaopen_cprof")()
 
--- TODO: proper sorting
--- TODO: proper drawTimeMin
 -- TODO: fix love.draw call count
 
 cprof.functionNames = {}
@@ -17,7 +15,9 @@ local startOnStateChange = false
 local stopOnStateChange = false
 
 local timeFormat = "per frame avg"
-local drawTimeMin = 0.2
+local displayMinMs = 0.1
+local displayMinPct = 5
+local sortBy = 'by time'
 
 
 local function finfo(f)
@@ -92,13 +92,66 @@ local function simpletimef(time)
 	end
 end
 
-local function format(time, callcount, framecount, parenttime, totaltime, parentcallcount)
-	if     timeFormat == 'total'          then return simpletimef(time) .. string.format(" [%i]", callcount)
-	elseif timeFormat == 'per frame avg'  then return simpletimef(time / framecount) .. string.format(" [%.2f]", callcount / framecount)
-	elseif timeFormat == 'per call avg'   then return simpletimef(time / callcount) .. string.format(" [%.2f]", callcount / parentcallcount)
-	elseif timeFormat == 'percent'        then return string.format("%4.1f %% ", 100 * time / totaltime) .. string.format(" [%i]", callcount)
-	elseif timeFormat == 'parent percent' then return string.format("%4.1f %% ", 100 * time / parenttime) .. string.format(" [%i]", callcount)
-	else log("[cprof] error! 'timeFormat' is invalid!", "error") end
+local function getTime(info, parentInfo, rootInfo)
+	if     timeFormat == 'total'          then return info.t
+	elseif timeFormat == 'per frame avg'  then return info.t / cprof.frameCount
+	elseif timeFormat == 'per call avg'   then return info.t / info.c
+	elseif timeFormat == 'percent'        then return info.t / rootInfo.t
+	elseif timeFormat == 'parent percent' then return info.t / parentInfo.t
+	else
+		log("[cprof] error! 'timeFormat' is invalid!", "error")
+		return info.t
+	end
+end
+
+local function getCallcount(info, parentInfo, rootInfo)
+	if     timeFormat == 'total'          then return info.c
+	elseif timeFormat == 'per frame avg'  then return info.c / cprof.frameCount
+	elseif timeFormat == 'per call avg'   then return info.c / parentInfo.c
+	elseif timeFormat == 'percent'        then return info.c
+	elseif timeFormat == 'parent percent' then return info.c
+	else
+		log("[cprof] error! 'timeFormat' is invalid!", "error")
+		return info.c
+	end
+end
+
+local function timeAsPercent()
+	if     timeFormat == 'total'          then return false
+	elseif timeFormat == 'per frame avg'  then return false
+	elseif timeFormat == 'per call avg'   then return false
+	elseif timeFormat == 'percent'        then return true
+	elseif timeFormat == 'parent percent' then return true
+	else return false
+	end
+end
+
+local function displayFormatTime(time)
+	if timeAsPercent() then
+		return string.format("%4.1f %% ", 100 * time)
+	else
+		return simpletimef(time)
+	end
+end
+
+local function displayFormat(time, callcount, func)
+	if     timeFormat == 'total'          then return string.format("%s [%i]  %s", displayFormatTime(time), callcount, finfo(func))
+	elseif timeFormat == 'per frame avg'  then return string.format("%s [%.2f]  %s", displayFormatTime(time), callcount, finfo(func))
+	elseif timeFormat == 'per call avg'   then return string.format("%s [%.2f]  %s", displayFormatTime(time), callcount, finfo(func))
+	elseif timeFormat == 'percent'        then return string.format("%s [%i]  %s", displayFormatTime(time), callcount, finfo(func))
+	elseif timeFormat == 'parent percent' then return string.format("%s [%i]  %s", displayFormatTime(time), callcount, finfo(func))
+	else
+		log("[cprof] error! 'timeFormat' is invalid!", "error")
+		return "<error> whoops! </error>"
+	end
+end
+
+local function shouldDisplay(time)
+	if timeAsPercent() then
+		return time >= displayMinPct/100
+	else
+		return time >= displayMinMs*1000 -- time is in microsecs
+	end
 end
 
 local function accuracyNote()
@@ -114,47 +167,60 @@ local function accuracyNote()
 	end
 end
 
-local function drawProfTable(root, parenttime, totaltime, parentcallcount)
-	local selfTime = root.t
-	local func = root.f
+local function drawProfTable(info, infoParent, infoRoot)
+	local selfTime = info.t
+	local func = info.f
 	local accurate = true
-	local callCount = root.c
-	parenttime = parenttime or root.t
-	totaltime = totaltime or root.t
-	parentcallcount = parentcallcount or 1
+
+	infoParent = infoParent or info
+	infoRoot = infoRoot or info
+
+	local time = getTime(info, infoParent, infoRoot)
+	local callcount = getCallcount(info, infoParent, infoRoot)
 
 	local subcalls = {}
-	for func,next in pairs(root) do
-		if func == "t" then goto continue end
-		if func == "p" then goto continue end
-		if func == "f" then goto continue end
-		if func == "c" then goto continue end
-		if func == "i" then accurate = false goto continue end
+	for key,child in pairs(info) do
+		if key == "t" then goto continue end
+		if key == "c" then goto continue end
+		if key == "p" then goto continue end
+		if key == "f" then goto continue end
+		if key == "i" then accurate = false goto continue end
 
-		--if next.t/1000 / cprof.frameCount > drawTimeMin then
-			table.insert(subcalls, next)
-		--end
-		selfTime = selfTime - next.t
+		selfTime = selfTime - child.t
+
+		local time = getTime(child, info, infoRoot)
+		local callcount = getCallcount(child, info, infoRoot)
+
+		if shouldDisplay(time) then
+			table.insert(subcalls, {next=child, time=time, callcount=callcount})
+		end
 
 		::continue::
 	end
 
 	-- sort by time taken
-	table.sort(subcalls, function(a, b) return a.t > b.t end)
+	if sortBy == 'by time' then
+		table.sort(subcalls, function(a, b) return a.time > b.time end)
+	elseif sortBy == 'by callcount' then
+		table.sort(subcalls, function(a, b) return a.callcount > b.callcount end)
+	end
+
+	selfTime = getTime({t=selfTime, c=info.c}, info, infoRoot) -- this is evil, and i know it... but it works so no hate, mkay?
 
 	-- print
-	local text = string.format("%s  %s", format(root.t, callCount, cprof.frameCount, parenttime, totaltime, parentcallcount), finfo(func))
+	local text = displayFormat(time, callcount, func)
 	if #subcalls == 0 then
 		imgui.BulletText(text)
 		if not accurate then accuracyNote() end
 	elseif imgui.TreeNode_StrStr(tostring(func), "%s", text) then
 		if not accurate then accuracyNote() end
-		--if selfTime/1000 / cprof.frameCount > drawTimeMin then
-			imgui.BulletText(string.format("%.2fms  (self)", selfTime/1000 / cprof.frameCount))
-		--end
+
+		if shouldDisplay(selfTime) then
+			imgui.BulletText(string.format("%s  (self)", displayFormatTime(selfTime)))
+		end
 
 		for _,v in ipairs(subcalls) do
-			drawProfTable(v, root.t, totaltime, callCount)
+			drawProfTable(v.next, info, infoRoot)
 		end
 
 		imgui.TreePop()
@@ -204,11 +270,17 @@ function cprof.draw()
 
 
 			imgui.TableNextColumn();
-			drawTimeMin = helpers.InputFloat("min draw ms", drawTimeMin, 0.1, 1)
-
 			timeFormat = imguiEnum("time format", timeFormat, {
 				'total', 'per frame avg', 'per call avg', 'percent', 'parent percent'
 			})
+
+			if timeAsPercent() then
+				displayMinPct = helpers.InputFloat("min display %", displayMinPct, 5, 20)
+			else
+				displayMinMs = helpers.InputFloat("min display ms", displayMinMs, 0.1, 1)
+			end
+
+			sortBy = imguiEnum("sort", sortBy, {'by time', 'by callcount'})
 
 			imgui.EndTable()
 		end
