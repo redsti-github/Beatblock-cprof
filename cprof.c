@@ -1,16 +1,22 @@
-#include <iostream>
-#include <cmath>
-#include <cstring>
-#include <lua5.1/lua.hpp>
-#include <lua5.1/lualib.h>
+#include <time.h>
+#include <math.h>
+#include <string.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <lua5.1/lua.h>
 #include <lua5.1/lauxlib.h>
-#include <vector>
-#include <chrono>
 
 //#define DEBUG
 
 // TODO: check for tail-calls
 // TODO: properly count calls for back-to-back C calls that don't hook return
+
+static bool failed = false;
+inline static size_t getTime(){
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (1000*1000*(size_t)ts.tv_sec) + (ts.tv_nsec / 1000); // return microseconds
+}
 
 static const char registryKey = 'k';
 inline static int push_regtable(lua_State* L){
@@ -96,17 +102,17 @@ inline static void stackDump(lua_State* L) {
 	printf("\n");
 }
 
-static void printInfo(lua_Debug* ar, bool printName = true){
-	if (ar->what) std::cout << "[" << ar->what << "]";
+static void printInfo(lua_Debug* ar, bool printName){
+	if (ar->what) printf("[%s]",  ar->what);
 
 	if (ar->source && ar->name && printName)
-		std::cout << ar->source << ":" << ar->name << "  ";
+		printf("%s:%s  ", ar->source, ar->name);
 	else if (ar->name && printName)
-		std::cout << ar->name << "  ";
+		printf("%s  ", ar->name);
 	else if (ar->source)
-		std::cout << ar->source << "  ";
+		printf("%s  ", ar->source);
 	else
-		std::cout << "??  ";
+		printf("??  ");
 }
 
 static int stackTrace(lua_State* L){
@@ -126,7 +132,7 @@ static int stackTrace(lua_State* L){
 		count++;
 	}
 
-	std::cout << "(" << count << ")\n";
+	printf("(%i)\n", count);
 	return count;
 }
 
@@ -143,12 +149,12 @@ static void printCallstack(lua_State* L){
 			lua_error(L);
 		}
 		if (ar.name)
-			std::cout << ar.name << "  ";
+			printf("%s  ", ar.name);
 		else {
-			printInfo(&ar);
+			printInfo(&ar, true);
 		}
 	}
-	std::cout << "(" << len << ")\n";
+	printf("(%lu)\n", len);
 	lua_pop(L, 1);
 
 	// count infonow upstack
@@ -164,7 +170,7 @@ static void printCallstack(lua_State* L){
 
 	lua_settop(L, regidx-1);
 
-	if (infonowParentCount != len) std::cout << "[cprof] ERROR! 'infonow' depth != 'callstack' depth!!";
+	if (infonowParentCount != len) puts("[cprof] ERROR! 'infonow' depth != 'callstack' depth!!");
 }
 #endif
 
@@ -194,7 +200,7 @@ static void callstackPush(lua_State* L, int regtable, int callstack, int timesta
 	// stack: ... <func>
 
 #ifdef DEBUG
-	std::cout << "callstackPush()\n";
+	puts("callstackPush()");
 #endif
 
 	// callstack[len] = func
@@ -344,7 +350,7 @@ static void callstackPop(lua_State* L, int regtable, int callstack, int timestac
 	lua_pop(L, 1); // pop old infonow
 }
 
-inline static int getStackDepth(lua_State* L, int depth = 3){ // initial depth is best guess
+inline static int getStackDepth(lua_State* L, int depth){ // initial depth is best guess
 	if (depth < 0) depth = 0;
 	lua_Debug ar;
 
@@ -370,22 +376,22 @@ inline static int getStackDepth(lua_State* L, int depth = 3){ // initial depth i
 
 
 static void debugHook(lua_State* L, lua_Debug* ar){
-	size_t time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+	size_t time = getTime();
 
 	bool isCall;
 	switch (ar->event){
 		case LUA_HOOKCALL: isCall = true; break;
 		case LUA_HOOKRET: isCall = false; break;
 		default:
-			std::cout << "unknown debug event"; return;
+			puts("[cprof] unknown debug event"); return;
 	}
 
 #ifdef DEBUG
 	lua_getinfo(L, "nS", ar);
-	std::cout << (isCall ? "Call: " : "Return: "); printInfo(ar);
+	printf("%s", isCall ? "Call: " : "Return: "); printInfo(ar, true);
 	lua_getinfo(L, "f", ar);
 	const void* fp = lua_topointer(L, -1);
-	std::cout << " <" << fp << ">\n";
+	printf(" <%p>", fp);
 	lua_pop(L, 1);
 	printCallstack(L);
 #endif
@@ -445,10 +451,10 @@ static void debugHook(lua_State* L, lua_Debug* ar){
 	}
 
 #ifdef DEBUG
-	std::cout << "after:\n";
+	puts("after:");
 	printCallstack(L);
 	stackTrace(L);
-	std::cout << "\n";
+	puts("");
 #endif
 
 	//// update proftimestack ////
@@ -460,7 +466,7 @@ static void debugHook(lua_State* L, lua_Debug* ar){
 	lua_pop(L, 1);
 
 	// proftimestack[len] = prev_pt + time2 - time
-	size_t time2 = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+	size_t time2 = getTime();
 	lua_pushnumber(L, prev_pt + time2 - time);
 	lua_rawseti(L, proftimestack, len);
 
@@ -486,7 +492,7 @@ static int l_start(lua_State* L){
 }
 
 static int l_stop(lua_State* L){
-	size_t time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+	size_t time = getTime();
 	lua_sethook(L, debugHook, 0, 0); // disable hook
 
 	int regtable = push_regtable(L);
@@ -526,7 +532,7 @@ static const struct luaL_reg cprof [] = {
 	{"getProfTable", l_getProfTable},
 	{NULL, NULL}  /* sentinel */
 };
-extern "C" int luaopen_cprof(lua_State *L) {
+int luaopen_cprof(lua_State *L) {
 	luaL_openlib(L, "cprof", cprof, 0);
 	initRegistry(L);
 	return 1;
