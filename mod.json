@@ -3,6 +3,6 @@
     "name": "cprof",
     "author": "redsti",
     "description": "cprof is a profiler for Beatblock",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "config": []
 }
