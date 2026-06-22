@@ -1,5 +1,21 @@
 jit.off()
-cprof = package.loadlib(love.filesystem.getSaveDirectory() .. "/Mods/cprof/cprof.so", "luaopen_cprof")()
+
+do -- load dll/so
+	local path = love.filesystem.getSaveDirectory()
+	local os = love.system.getOS()
+	if os == "Windows" then
+		path = path .. "\\Mods\\cprof\\?.dll"
+	else
+		path = path .. "/Mods/cprof/?.so"
+	end
+	local prevPackagePath = package.path
+	local prevPackageCpath = package.cpath
+	package.path = ""
+	package.cpath = path
+	cprof = require("cprof")
+	package.path = prevPackagePath
+	package.cpath = prevPackageCpath
+end
 
 -- TODO: fix love.draw call count
 

@@ -532,7 +532,10 @@ static const struct luaL_reg cprof [] = {
 	{"getProfTable", l_getProfTable},
 	{NULL, NULL}  /* sentinel */
 };
-int luaopen_cprof(lua_State *L) {
+#ifdef WINDOWS
+__declspec(dllexport)
+#endif
+extern int luaopen_cprof(lua_State *L) {
 	luaL_openlib(L, "cprof", cprof, 0);
 	initRegistry(L);
 	return 1;
